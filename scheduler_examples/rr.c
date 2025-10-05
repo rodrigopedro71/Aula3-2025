@@ -1,4 +1,4 @@
-#include "sjf.h"
+#include "rr.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -6,6 +6,7 @@
 #include "msg.h"
 #include <unistd.h>
 #include "queue.h"
+#include <stdint.h>
 
 /**
  * @brief First-In-First-Out (FIFO) scheduling algorithm.
@@ -21,54 +22,50 @@
  *                 to point to the next task to run.
  */
 
-pcb_t* acharMenorProcesso(queue_t *q) {
-    if (!q || !q->head) return NULL;
 
-    queue_elem_t *menor = q->head, *anteriorMenor = NULL;
-    queue_elem_t *atual = q->head, *anterior = NULL;
 
-    while (atual) {
-        if (atual->pcb->time_ms < menor->pcb->time_ms) {
-            menor = atual;
-            anteriorMenor = anterior;
-        }
-        anterior = atual;
-        atual = atual->next;
+pcb_t* aplicarRoundRobin(queue_t *rq, pcb_t *cpu_task, uint32_t current_time_ms) {
+    if (cpu_task && (current_time_ms - cpu_task->slice_start_ms) >= 500
+        && cpu_task->ellapsed_time_ms < cpu_task->time_ms) {
+        enqueue_pcb(rq, cpu_task);   // envia para o fim da fila
+        cpu_task = NULL;
     }
 
-    if (menor != q->head) {
-        if (anteriorMenor) anteriorMenor->next = menor->next;
-        if (menor == q->tail) q->tail = anteriorMenor;
-        menor->next = q->head;
-        q->head = menor;
+    if (cpu_task == NULL) {          // CPU livre: busca próximo
+        cpu_task = dequeue_pcb(rq);
+        if (cpu_task) cpu_task->slice_start_ms = current_time_ms;
     }
 
-    return menor->pcb; // devolve o processo com menor tempo
+    return cpu_task;
 }
 
 
 
-
-void sjf_scheduler(uint32_t current_time_ms, queue_t *rq, pcb_t **cpu_task) {
+void rr_scheduler(uint32_t current_time_ms, queue_t *rq, pcb_t **cpu_task) {
     if (*cpu_task) {
         (*cpu_task)->ellapsed_time_ms += TICKS_MS;      // Add to the running time of the application/task
         if ((*cpu_task)->ellapsed_time_ms >= (*cpu_task)->time_ms) {
             // Task finished
             // Send msg to application
             msg_t msg = {
-                .pid = (*cpu_task)->pid,
-                .request = PROCESS_REQUEST_DONE,
-                .time_ms = current_time_ms
+                    .pid = (*cpu_task)->pid,
+                    .request = PROCESS_REQUEST_DONE,
+                    .time_ms = current_time_ms
             };
             if (write((*cpu_task)->sockfd, &msg, sizeof(msg_t)) != sizeof(msg_t)) {
                 perror("write");
             }
-            // Application finished and can be removed (this is FIFO after all)
-            free((*cpu_task));
-            (*cpu_task) = NULL;
+            free(*cpu_task);
+            *cpu_task = NULL;
+        }
+        else if ((current_time_ms - (*cpu_task)->slice_start_ms) >= 500) {
+            (*cpu_task)->slice_start_ms = current_time_ms;
+            enqueue_pcb(rq, *cpu_task);
+            *cpu_task = NULL;
         }
     }
-    if (*cpu_task == NULL) {            // If CPU is idle
-        *cpu_task = acharMenorProcesso(rq);   // Get next task from ready queue (dequeue from head)
+    if (*cpu_task == NULL && rq->head != NULL) {
+        *cpu_task = aplicarRoundRobin(rq, *cpu_task, TICKS_MS);
+        (*cpu_task)->slice_start_ms = current_time_ms;
     }
 }
