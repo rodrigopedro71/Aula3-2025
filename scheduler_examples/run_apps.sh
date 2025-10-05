@@ -1,3 +1,3 @@
-./app A 7 &
-./app B 5 &
-./app C 3 &
+./app A 10 &
+./app B 15 &
+./app C 20 &
